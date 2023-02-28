@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "stdio.h": "c",
+        "unistd.h": "c",
+        "assert.h": "c",
+        "stdlib.h": "c",
+        "limits": "c",
+        "*.tcc": "c",
+        "memlib.h": "c"
+    }
+}

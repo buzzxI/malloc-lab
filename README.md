@@ -1,2 +1,0 @@
-# malloc-lab
- malloc lab
