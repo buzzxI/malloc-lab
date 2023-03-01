@@ -44,9 +44,8 @@ static int high_bit(UI val);
 static UI block_size(void* header);
 static void* extend_heap(size_t size);
 static int pack(void* header, UI block_size, int pre, int cur);
+static void new_size(void* header, UI size);
 static int power_of_two(int val);
-static void* free_header(void* bp);
-static void* allocated_header(void* bp);
 static void* get_footer(void* header);
 static void* coalesce(void* header);
 static void* allocate_block(void* header, size_t size);
@@ -107,8 +106,6 @@ void mm_free(void *ptr)
 {
     // coalesce block immediately
     void* header = coalesce(ptr - MIN_UNIT);
-    // link free block to list
-    link_to_list(header);
 }
 
 /*
@@ -148,28 +145,21 @@ static void* extend_heap(size_t size) {
     // legalize @param:size(size should be aligned by 8 Bytes and at least MIN_BLOCK(24) Bytes)
     if (size < MIN_CHUNK) size = MIN_CHUNK;
     // size round up to align 8 Bytes
-    round_up_size(size);
+    size = round_up_size(size);
     void* p;
     if ((p = mem_sbrk(size)) == (void*)-1) return NULL;
     // extend heap will request a new block at the top of heap
     // thus we need to exterminate old and create new epilogue block
     void* header = p - MIN_UNIT;
-    // we should not change epilogue block's pre block bit
-    *(UI*)header &= 0x7;
-    *(UI*)header |= size;
+    // build block header
+    new_size(header, size);
+    // rebuild epilogue block, after an "extend_heap" we always get a free block
+    pack(header + size, 0, 0, 1);
     // try to coalese new block with remaining free block
     header = coalesce(header);
     size = block_size(header);
-    // link free block to segregated list
-    *(ULL*)(header + MIN_UNIT) = NULL_ADD;
-    int idx = high_bit(size);
-    *(ULL*)(header + MIN_UNIT + ADD_LEN) = list[idx];
-    if (list[idx] != NULL_ADD) *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
-    else list[idx] = (ULL)(header);
-    // build footer
-    pack(get_footer(header), size, (*(UI*)header & 0x2) >> 1, 0);
-    // rebuild epilogue block, after an "extend_heap" we always get a free block
-    pack(header + size, 0, 0, 1);
+    // clear next block's pre block allocation bit
+    *(UI*)(header + size) &= ~2;
     return header;
 }
 /**
@@ -181,39 +171,50 @@ static void* coalesce(void* header) {
     void* ne = header + size;
     // if next block is free block
     if (!(*(UI*)ne & 1)) {
-        size += block_size(ne);
+        UI ne_size = block_size(ne);
+        size += ne_size;
+        int idx = high_bit(ne_size);
         // rebuild next block's free list
-        // before: npre <-> ne <-> nne
-        // after: npre <-> nne
+        // before: npre <-> ne <-> nne after: npre <-> nne
         // npre and nne can be NULL
+        // if npre and nne are NULL, list should be freed
         ULL npre = *(ULL*)(ne + MIN_UNIT);
         ULL nne = *(ULL*)(ne + MIN_UNIT + ADD_LEN);
-        if (npre != NULL_ADD) *(ULL*)(npre + MIN_UNIT + ADD_LEN) = nne;
-        if (nne != NULL_ADD) *(ULL*)(nne + MIN_UNIT) = npre; 
+        if (npre == NULL_ADD && nne == NULL_ADD) {
+            list[idx] == NULL_ADD;
+        } else if (npre != NULL_ADD) {
+            *(ULL*)(npre + MIN_UNIT + ADD_LEN) = nne;
+        } else {
+            *(ULL*)(nne + MIN_UNIT) = npre;
+        } 
     }
     // if pre block is free block
     if (!((*(UI*)header >> 1) & 1)) {
-        int pre_size =  block_size(header - MIN_UNIT);
+        UI pre_size =  block_size(header - MIN_UNIT);
         void* pre = header - pre_size;
         size += pre_size;
+        int idx = high_bit(pre_size);
         // rebuild pre block free list
-        // before: ppre <-> pre <-> pne
-        // after: ppre <-> pne
+        // before: ppre <-> pre <-> pne after: ppre <-> pne
         // ppre and pne can be NULL
+        // if ppre and pne are NULL, list should be freed
         ULL ppre = *(ULL*)(pre + MIN_UNIT);
         ULL pne = *(ULL*)(pre + MIN_UNIT + ADD_LEN);
-        if (ppre != NULL_ADD) *(ULL*)(ppre + MIN_UNIT + ADD_LEN) = pne;
-        if (pne != NULL_ADD) *(ULL*)(pne + MIN_UNIT) = ppre;
+        if (ppre == NULL_ADD && pne == NULL_ADD) {
+            list[idx] = NULL_ADD;
+        } else if (ppre != NULL_ADD) {
+            *(ULL*)(ppre + MIN_UNIT + ADD_LEN) = pne;
+        } else {
+            *(ULL*)(pne + MIN_UNIT) = ppre;
+        }
         header = pre;
     }
-    // build new header
-    pack(header, size, (*(UI*)(header) & 0x2) >> 1, 0);
-    // build new footer
-    ne = header + size;
-    pack(ne - MIN_UNIT, size, 1, 0);
-    UI ne_size = block_size(ne);
-    // clear next block's pre block allocation bit
-    *(UI*)(ne + ne_size) &= ~2;
+    // rebuild block header
+    new_size(header, size);
+    // rebuild block footer
+    new_size(get_footer(header), size);
+    // link free block to segregated list
+    link_to_list(header);
     return header;
 }
 /**
@@ -228,16 +229,18 @@ static void* allocate_block(void* header, size_t size) {
     ULL ne = *(ULL*)(header + MIN_UNIT + ADD_LEN);
     // previous block in segregated list
     ULL pre = *(ULL*)(header + MIN_UNIT);
-    // if current block is the only free block in list[idx], then we should set list[idx] as NULL
-    if (ne == NULL_ADD && pre == NULL_ADD) {
-        list[high_bit(size)] = NULL_ADD;
-    } else if (ne != NULL_ADD) {
-        *(ULL*)(ne + MIN_UNIT) = *(ULL*)(header + MIN_UNIT);
-    } else {
-        *(ULL*)(pre + MIN_UNIT + ADD_LEN) = *(ULL*)(header + MIN_UNIT + ADD_LEN);
-    }
-    // if remaining space is larger than 24 Bytes(minimum cost of free block), then we should split the block
+    // if current block is the only free block in list[idx]
+    // then we should set list[idx] as NULL
     UI ori_size = block_size(header);
+    if (ne == NULL_ADD && pre == NULL_ADD) {
+        list[high_bit(ori_size)] = NULL_ADD;
+    } else if (ne != NULL_ADD) {
+        *(ULL*)(ne + MIN_UNIT) = pre;
+    } else {
+        *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
+    }
+    // if remaining space is larger than 24 Bytes(minimum cost of free block)
+    // then we should split the block
     if (ori_size - size >= 24) split_block(header, size);
     else {
         // physical next block
@@ -249,7 +252,7 @@ static void* allocate_block(void* header, size_t size) {
 }
 
 /**
- * split original block with the first block has size @param: block_size
+ * split original block with the first block has size @param: size
  * the first block will be considered as allocated block
  * the second block will be initialized as free block
  * after splitting a free block, split_block will call coalesce
@@ -267,9 +270,6 @@ static void split_block(void* header, UI size) {
     pack(ne, remain_size, 1, 0);
     // merge the second block and the next free block(phyiscally)
     coalesce(ne);
-    link_to_list(ne);
-    // build second block footer
-    pack(get_footer(ne), remain_size, 1, 0);
 }
 
 /**
@@ -284,12 +284,9 @@ static void link_to_list(void* header) {
     *(ULL*)(header + MIN_UNIT + ADD_LEN) = list[idx];
     if (list[idx] != NULL_ADD) {
         *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
-    }
-    else {
+    } else {
         list[idx] = (ULL)header;
     }
- 
-
 }
 
 static UI round_up_size(UI size) {
@@ -301,6 +298,16 @@ static UI block_size(void* header) {
     return *(UI*)header & ~0x7;
 }
 
+/**
+ * assign free block new size
+ * typically new size is larger than old one
+ * only size changes, control bit remains
+*/
+static void new_size(void* header, UI size) {
+    *(UI*)header &= 0x7;
+    *(UI*)header |= size;
+}
+
 /* pack the header with specific value */
 static int pack(void* header, UI block_size, int pre, int cur) {
     if (block_size & 0x7) {
@@ -309,17 +316,6 @@ static int pack(void* header, UI block_size, int pre, int cur) {
     }
     *(UI*)header = block_size | (pre & 1) << 1 | cur & 1;
     return 0;
-}
-
-// a free block has a struct of: 
-// header[4 Bytes] + pre[8 Bytes] + succ[8 Bytes] + block + padding + footer[4 Bytes]
-static void* free_header(void* bp) {
-    return bp - 2 * ADD_LEN - MIN_UNIT;
-}
-// an allocated block has a struct of:
-// header[4 Bytes] + data + padding
-static void* allocated_header(void* bp) {
-    return bp - MIN_UNIT;
 }
 
 // only free block has footer
