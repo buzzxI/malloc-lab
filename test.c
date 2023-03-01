@@ -45,7 +45,6 @@ static UI block_size(void* header);
 static void* extend_heap(size_t size);
 static int pack(void* header, UI block_size, int pre, int cur);
 static void new_size(void* header, UI size);
-static int power_of_two(int val);
 static void* get_footer(void* header);
 static void* coalesce(void* header);
 static void* allocate_block(void* header, size_t size);
@@ -105,7 +104,7 @@ void *mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
     // coalesce block immediately
-    void* header = coalesce(ptr - MIN_UNIT);
+    coalesce(ptr - MIN_UNIT);
 }
 
 /*
@@ -181,7 +180,7 @@ static void* coalesce(void* header) {
         ULL npre = *(ULL*)(ne + MIN_UNIT);
         ULL nne = *(ULL*)(ne + MIN_UNIT + ADD_LEN);
         if (npre == NULL_ADD && nne == NULL_ADD) {
-            list[idx] == NULL_ADD;
+            list[idx] = NULL_ADD;
         } else if (npre != NULL_ADD) {
             *(ULL*)(npre + MIN_UNIT + ADD_LEN) = nne;
         } else {
@@ -314,7 +313,7 @@ static int pack(void* header, UI block_size, int pre, int cur) {
         fprintf(stderr, "illegal block size");
         return -1;
     }
-    *(UI*)header = block_size | (pre & 1) << 1 | cur & 1;
+    *(UI*)header = block_size | (pre & 1) << 1 | (cur & 1);
     return 0;
 }
 
@@ -337,15 +336,9 @@ static int high_bit(UI val) {
     return bit;
 }
 
-/* determine if @param:val is power of 2 */
-static int power_of_two(int val) {
-    return !val && !(val & (val - 1));
-}
-
 static UI min(UI a, UI b) {
     return a <= b ? a : b;
 }
-
 
 int main() {
     mem_init();
@@ -356,5 +349,11 @@ int main() {
     b = mm_malloc(48);
     void* c = mm_malloc(4072);
     mm_free(c);
+    void* d = mm_malloc(4072);
+    mm_free(a);
+    mm_free(b);
+    void* e = mm_malloc(4072);
+    mm_free(d);
+    mm_free(e);
     return 0;
 }
