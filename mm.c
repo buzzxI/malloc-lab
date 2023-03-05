@@ -139,6 +139,7 @@ void mm_free(void *ptr)
     // clear next block's pre block allocation bit
     UI size = block_size(header);
     *(UI*)(header + size) &= ~2;
+    printf("free: %p ~ %p\n", header, header + size);
 }
 
 /*
@@ -233,8 +234,12 @@ static void* allocate_block(void* header, size_t size) {
     UI ori_size = block_size(header);
     // if remaining space is larger than 24 Bytes(minimum cost of free block)
     // then we should split the block
-    if (ori_size - size >= 24) split_block(header, size);
+    if (ori_size - size >= 24) {
+        printf("allocate: %p ~ %p\n", header, header + size);
+        split_block(header, size);
+    }
     else {
+        printf("allocate: %p ~ %p\n", header, header + ori_size);
         // set next block's pre block allocation bit
         *(UI*)(header + ori_size) |= 2;
     }
