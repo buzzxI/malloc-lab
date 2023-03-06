@@ -103,7 +103,7 @@ int mm_init(void)
 */
 void *mm_malloc(size_t size)
 {
-    if (hits == 417) {
+    if (hits == 416) {
         int num = 10;
     }
     hits++;
@@ -132,6 +132,9 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+    if (hits == 416) {
+        int num = 10;
+    }
     // coalesce block immediately
     void* header = coalesce(ptr - MIN_UNIT);
     // link free block to segregated free list
@@ -219,7 +222,11 @@ static void* coalesce(void* header) {
         detach_off(pre);
         header = pre;
     }
+    // clear current block's allocation bit
+    *(UI*)header &= ~1;
     rebuild_hf(header, size);
+    // clear next block's pre block allocation bit
+    *(UI*)(header + size) &= ~2;
     return header;
 }
 
