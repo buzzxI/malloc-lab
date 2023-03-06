@@ -75,7 +75,8 @@ static void split_block(void* header, UI block_size);
 static UI round_up_size(UI size);
 static void link_to_list(void* header);
 static int legal(void* add);
-int hits = 0;
+int a_hits = 0;
+int f_hits = 1;
 
 /**
  * mm_init - initialize the malloc package.
@@ -103,10 +104,10 @@ int mm_init(void)
 */
 void *mm_malloc(size_t size)
 {
-    if (hits == 416) {
+    if (a_hits == 101) {
         int num = 10;
     }
-    hits++;
+    a_hits++;
     if (size == 0) return NULL;
     // every allocated block has a header with 4 Bytes
     size += MIN_UNIT;
@@ -132,9 +133,11 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    if (hits == 416) {
+    if (f_hits == 1965) {
         int num = 10;
     }
+    f_hits++;
+    printf("block size: %d\n", block_size(ptr - MIN_UNIT));
     // coalesce block immediately
     void* header = coalesce(ptr - MIN_UNIT);
     // link free block to segregated free list
@@ -142,7 +145,7 @@ void mm_free(void *ptr)
     // clear next block's pre block allocation bit
     UI size = block_size(header);
     *(UI*)(header + size) &= ~2;
-    printf("free: %p ~ %p\n", header, header + size);
+    //printf("free: %p ~ %p\n", header, header + size);
 }
 
 /*
@@ -242,11 +245,11 @@ static void* allocate_block(void* header, size_t size) {
     // if remaining space is larger than 24 Bytes(minimum cost of free block)
     // then we should split the block
     if (ori_size - size >= 24) {
-        printf("allocate: %p ~ %p\n", header, header + size);
+        //printf("allocate: %p ~ %p\n", header, header + size);
         split_block(header, size);
     }
     else {
-        printf("allocate: %p ~ %p\n", header, header + ori_size);
+        //printf("allocate: %p ~ %p\n", header, header + ori_size);
         // set next block's pre block allocation bit
         *(UI*)(header + ori_size) |= 2;
     }
@@ -286,11 +289,11 @@ static void link_to_list(void* header) {
     *(ULL*)(header + MIN_UNIT) = NULL_ADD;
     // link free block to segregated list
     *(ULL*)(header + MIN_UNIT + ADD_LEN) = list[idx];
-    if (legal(list[idx])) {
+    if (list[idx] != NULL_ADD) {
         *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
-    } else {
-        list[idx] = (ULL)header;
     }
+    // link current block to list
+    list[idx] = (ULL)header;
 }
 
 /**
@@ -299,14 +302,20 @@ static void link_to_list(void* header) {
 static void detach_off(void* header) {
     UI size = block_size(header);
     int idx = high_bit(size);
-    ULL ne = *(ULL*)(header + MIN_UNIT);
-    ULL pre = *(ULL*)(header + MIN_UNIT + ADD_LEN);
-    if (!legal((void*)ne) && !legal((void*)pre)) {
+    ULL pre = *(ULL*)(header + MIN_UNIT);
+    ULL ne = *(ULL*)(header + MIN_UNIT + ADD_LEN);
+    if (pre == NULL_ADD && ne == NULL_ADD) {
         list[idx] = NULL_ADD;
-    } else if (legal(ne)) {
-        *(ULL*)(ne + MIN_UNIT) = pre;
     } else {
-        *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
+        if (ne != NULL_ADD) {
+            *(ULL*)(ne + MIN_UNIT) = pre;
+            if (pre == NULL_ADD) {
+                list[idx] = ne;
+            }
+        }
+        if (pre != NULL_ADD) {
+            *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
+        }
     }
 }
 
