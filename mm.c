@@ -90,7 +90,7 @@ int mm_init(void)
     // mark prologue block
     pack(heapp, 0, 0, 1);
     // mark epilogue block
-    pack(heapp + 4, 0, 1, 1);
+    pack(heapp + MIN_UNIT, 0, 1, 1);
     int i;
     // initialize segregated list
     for (i = 0; i < LIST_SIZE; i++) list[i] = NULL_ADD;
@@ -195,7 +195,6 @@ static void* extend_heap(size_t size) {
     rebuild_hf(header, size);
     // rebuild epilogue block
     pack(header + size, 0, 0, 1);
-    end = header + size;
     // try to coalese new block with front block 
     header = coalesce(header);
     link_to_list(header);
@@ -212,13 +211,13 @@ static void* coalesce(void* header) {
     UI size = block_size(header);
     void* ne = header + size;
     // if next block is free block
-    if (!(*(UI*)ne & 1)) {
+    if (!(*(UI*)ne & 0x1)) {
         size += block_size(ne);
         detach_off(ne);
     }
     // if pre block is free block
     //if (!(*(UI*)header & 0x2)) {
-    if (!((*(UI*)header >> 1) & 1)) {
+    if (!((*(UI*)header >> 1) & 0x1)) {
         UI pre_size =  block_size(header - MIN_UNIT);
         void* pre = header - pre_size;
         size += pre_size;
@@ -267,15 +266,16 @@ static void split_block(void* header, UI size) {
     // rebuild first block's header
     UI ori_size = block_size(header);
     new_size(header, size);
-    void* ne = header + size;
     UI ne_size = ori_size - size;
-    // rebuild second block's header and footer
-    pack(ne, ne_size, 1, 0);
-    pack(get_footer(ne), ne_size, 1, 0);
+    void* ne = header + size;
+    *(UI*)(ne) |= 0x2;
+    *(UI*)(ne) &= ~0x1;
+    // rebuild next block's header and footer
+    rebuild_hf(ne, ne_size);
     ne = coalesce(ne);
     link_to_list(ne);
     // clear next block's pre block allocation bit
-    *(UI*)(ne + ne_size) &= ~2;
+    *(UI*)(ne + ne_size) &= ~0x2;
 }
 
 
@@ -346,7 +346,7 @@ static void new_size(void* header, UI size) {
 static void rebuild_hf(void* header, UI size) {
     new_size(header, size);
     // rebuild footer
-    pack(get_footer(header), size, *(UI*)header & 0x2, *(UI*)header & 0x1);
+    pack(get_footer(header), size, (*(UI*)header & 0x2) >> 1, *(UI*)header & 0x1);
 }
 
 /* pack the header with specific value */
