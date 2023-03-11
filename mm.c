@@ -76,9 +76,8 @@ static void* allocate_block(void* header, size_t size);
 static void split_block(void* header, UI block_size);
 static UI round_up_size(UI size);
 static void link_to_list(void* header);
-// debug variables used to count allocate and free count
 int a_hits = 0;
-int f_hits = 1;
+int f_hits = 0;
 
 /**
  * mm_init - initialize the malloc package.
@@ -122,6 +121,7 @@ void *mm_malloc(size_t size)
     void* header = extend_heap(size);
     if (header == NULL) return NULL;
     return allocate_block(header, size);
+    
 }
 
 /*
@@ -129,7 +129,6 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    UI ori_size = block_size(ptr - 4);
     // coalesce block immediately
     void* header = coalesce(ptr - MIN_UNIT);
     // link free block to segregated free list
@@ -149,8 +148,7 @@ void *mm_realloc(void *ptr, size_t size)
         mm_free(ptr);
         return NULL;
     }
-    UI request_size = 6000
- + MIN_UNIT;
+    UI request_size = size + MIN_UNIT;
     request_size = round_up_size(request_size);
     void* header = ptr - MIN_UNIT;
     UI ori_size = block_size(header);
@@ -235,7 +233,7 @@ static void* allocate_block(void* header, size_t size) {
     // if remaining space is larger than 24 Bytes(minimum cost of free block)
     // then we should split the block
     if (ori_size - size >= 24) split_block(header, size);
-    // set next block's pre block's allocation block
+    // set next block's pre block allocation bit
     else *(UI*)(header + ori_size) |= 2;
     return header + MIN_UNIT;
 }
