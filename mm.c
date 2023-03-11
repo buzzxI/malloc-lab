@@ -165,6 +165,7 @@ void *mm_realloc(void *ptr, size_t size)
         return ne_block;
     }
 }
+
 /**
  * extend heap with a block at least @param:size Bytes
  * heap will extend at least MIN_CHUNK(4K) Bytes
@@ -193,6 +194,7 @@ static void* extend_heap(size_t size) {
     *(UI*)(header + size) &= ~2;
     return header;
 }
+
 /**
  * coalesce current free block with physical pre and succ free blocks
  * @return new header
