@@ -46,6 +46,8 @@ team_t team = {
 #define LIST_SIZE 25
 /* minimum request block size */
 #define MIN_CHUNK 1 << 12
+/* every block(allocated/freed) should be larger than 24 Bytes */
+#define MIN_BLOCK 24
 /* illegal address */
 #define NULL_ADD 0
 
@@ -74,7 +76,7 @@ static void* allocate_block(void* header, size_t size);
 static void split_block(void* header, UI block_size);
 static UI round_up_size(UI size);
 static void link_to_list(void* header);
-static int legal(void* add);
+// debug variables used to count allocate and free count
 int a_hits = 0;
 int f_hits = 1;
 
@@ -104,28 +106,22 @@ int mm_init(void)
 */
 void *mm_malloc(size_t size)
 {
-    if (a_hits == 101) {
-        int num = 10;
-    }
-    a_hits++;
     if (size == 0) return NULL;
     // every allocated block has a header with 4 Bytes
     size += MIN_UNIT;
     size = round_up_size(size);
+    if (size < MIN_BLOCK) size = MIN_BLOCK;
     int idx;
     for (idx = high_bit(size); idx < LIST_SIZE; idx++) {
         ULL header;
-        for (header = list[idx]; legal(header); header = *(ULL*)(header + MIN_UNIT + ADD_LEN)) {
+        for (header = list[idx]; header != NULL_ADD; header = *(ULL*)(header + MIN_UNIT + ADD_LEN)) {
             UI tmp_size = block_size((void*)header);
-            if (tmp_size >= size) {
-                return allocate_block((void*)header, size);
-            }
+            if (tmp_size >= size) return allocate_block((void*)header, size);
         }
     }
     void* header = extend_heap(size);
     if (header == NULL) return NULL;
     return allocate_block(header, size);
-    
 }
 
 /*
@@ -133,11 +129,7 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    if (f_hits == 1965) {
-        int num = 10;
-    }
-    f_hits++;
-    printf("block size: %d\n", block_size(ptr - MIN_UNIT));
+    UI ori_size = block_size(ptr - 4);
     // coalesce block immediately
     void* header = coalesce(ptr - MIN_UNIT);
     // link free block to segregated free list
@@ -145,7 +137,6 @@ void mm_free(void *ptr)
     // clear next block's pre block allocation bit
     UI size = block_size(header);
     *(UI*)(header + size) &= ~2;
-    //printf("free: %p ~ %p\n", header, header + size);
 }
 
 /*
@@ -158,7 +149,8 @@ void *mm_realloc(void *ptr, size_t size)
         mm_free(ptr);
         return NULL;
     }
-    UI request_size = size + MIN_UNIT;
+    UI request_size = 6000
+ + MIN_UNIT;
     request_size = round_up_size(request_size);
     void* header = ptr - MIN_UNIT;
     UI ori_size = block_size(header);
@@ -216,7 +208,6 @@ static void* coalesce(void* header) {
         detach_off(ne);
     }
     // if pre block is free block
-    //if (!(*(UI*)header & 0x2)) {
     if (!((*(UI*)header >> 1) & 0x1)) {
         UI pre_size =  block_size(header - MIN_UNIT);
         void* pre = header - pre_size;
@@ -243,15 +234,9 @@ static void* allocate_block(void* header, size_t size) {
     UI ori_size = block_size(header);
     // if remaining space is larger than 24 Bytes(minimum cost of free block)
     // then we should split the block
-    if (ori_size - size >= 24) {
-        //printf("allocate: %p ~ %p\n", header, header + size);
-        split_block(header, size);
-    }
-    else {
-        //printf("allocate: %p ~ %p\n", header, header + ori_size);
-        // set next block's pre block allocation bit
-        *(UI*)(header + ori_size) |= 2;
-    }
+    if (ori_size - size >= 24) split_block(header, size);
+    // set next block's pre block's allocation block
+    else *(UI*)(header + ori_size) |= 2;
     return header + MIN_UNIT;
 }
 
@@ -289,9 +274,7 @@ static void link_to_list(void* header) {
     *(ULL*)(header + MIN_UNIT) = NULL_ADD;
     // link free block to segregated list
     *(ULL*)(header + MIN_UNIT + ADD_LEN) = list[idx];
-    if (list[idx] != NULL_ADD) {
-        *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
-    }
+    if (list[idx] != NULL_ADD) *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
     // link current block to list
     list[idx] = (ULL)header;
 }
@@ -304,18 +287,13 @@ static void detach_off(void* header) {
     int idx = high_bit(size);
     ULL pre = *(ULL*)(header + MIN_UNIT);
     ULL ne = *(ULL*)(header + MIN_UNIT + ADD_LEN);
-    if (pre == NULL_ADD && ne == NULL_ADD) {
-        list[idx] = NULL_ADD;
-    } else {
+    if (pre == NULL_ADD && ne == NULL_ADD) list[idx] = NULL_ADD;
+    else {
         if (ne != NULL_ADD) {
             *(ULL*)(ne + MIN_UNIT) = pre;
-            if (pre == NULL_ADD) {
-                list[idx] = ne;
-            }
+            if (pre == NULL_ADD) list[idx] = ne;
         }
-        if (pre != NULL_ADD) {
-            *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
-        }
+        if (pre != NULL_ADD) *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
     }
 }
 
@@ -371,8 +349,4 @@ static int high_bit(UI val) {
         }
     }
     return bit;
-}
-
-static int legal(void* add) {
-    return add <= end && add >= heapp;
 }
