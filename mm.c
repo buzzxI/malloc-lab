@@ -40,8 +40,6 @@ team_t team = {
 #define ADD_LEN 8
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
-/* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 /* max list size 2^{24}(16MB) */
 #define LIST_SIZE 25
 /* minimum request block size */
@@ -50,6 +48,19 @@ team_t team = {
 #define MIN_BLOCK 24
 /* illegal address */
 #define NULL_ADD 0
+
+/* get block size from header */
+#define BLOCK_SIZE(header) (*(UI*)(header) & ~0x7)
+/* build new header(footer) */
+#define PACK(header, block_size, pre, cur) (*(UI*)(header) = (block_size) | ((pre) & 1) << 1 | ((cur) & 1))
+/* rebuild header with new size */
+#define NEW_SIZE(header, size) (*(UI*)(header) = (size) | *(UI*)(header) & 0x7)
+/* get block footer */
+#define GET_FOOTER(header) ((header) + BLOCK_SIZE(header) - MIN_UNIT)
+/* rebuild block's header and footer */
+#define REBUILD_HF(header, size) (NEW_SIZE(header, size), PACK(GET_FOOTER(header), (size), (*(UI*)(header) & 0x2) >> 1, *(UI*)(header) & 0x1))
+/* rounds up to the nearest multiple of ALIGNMENT */
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 typedef unsigned long long ULL;
 typedef unsigned int UI;
@@ -64,17 +75,11 @@ const static UI b[] = {0x2, 0xc, 0xf0, 0xff00, 0xffff0000};
 const static int s[] = {1, 2, 4, 8, 16};
 /* helper functions */
 static int high_bit(UI val);
-static UI block_size(void* header);
 static void* extend_heap(size_t size);
-static void pack(void* header, UI block_size, int pre, int cur);
-static void new_size(void* header, UI size);
-static void rebuild_hf(void* header, UI size);
-static void* get_footer(void* header);
 static void* coalesce(void* header);
 static void detach_off(void* header);
 static void* allocate_block(void* header, size_t size);
 static void split_block(void* header, UI block_size);
-static UI round_up_size(UI size);
 static void link_to_list(void* header);
 int a_hits = 0;
 int f_hits = 0;
@@ -89,9 +94,9 @@ int mm_init(void)
     // create prologue block and epilogue block 
     if ((heapp = mem_sbrk(2 * MIN_UNIT)) == (void*)-1) return -1;
     // mark prologue block
-    pack(heapp, 0, 0, 1);
+    PACK(heapp, 0, 0, 1);
     // mark epilogue block
-    pack(heapp + MIN_UNIT, 0, 1, 1);
+    PACK(heapp + MIN_UNIT, 0, 1, 1);
     int i;
     // initialize segregated list
     for (i = 0; i < LIST_SIZE; i++) list[i] = NULL_ADD;
@@ -108,13 +113,13 @@ void *mm_malloc(size_t size)
     if (size == 0) return NULL;
     // every allocated block has a header with 4 Bytes
     size += MIN_UNIT;
-    size = round_up_size(size);
+    size = ALIGN(size);
     if (size < MIN_BLOCK) size = MIN_BLOCK;
     int idx;
     for (idx = high_bit(size); idx < LIST_SIZE; idx++) {
         ULL header;
         for (header = list[idx]; header != NULL_ADD; header = *(ULL*)(header + MIN_UNIT + ADD_LEN)) {
-            UI tmp_size = block_size((void*)header);
+            UI tmp_size = BLOCK_SIZE((void*)header);
             if (tmp_size >= size) return allocate_block((void*)header, size);
         }
     }
@@ -134,7 +139,7 @@ void mm_free(void *ptr)
     // link free block to segregated free list
     link_to_list(header);
     // clear next block's pre block allocation bit
-    UI size = block_size(header);
+    UI size = BLOCK_SIZE(header);
     *(UI*)(header + size) &= ~2;
 }
 
@@ -149,9 +154,9 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
     UI request_size = size + MIN_UNIT;
-    request_size = round_up_size(request_size);
+    request_size = ALIGN(request_size);
     void* header = ptr - MIN_UNIT;
-    UI ori_size = block_size(header);
+    UI ori_size = BLOCK_SIZE(header);
     // if original block is big enough, then we may want to return original block immediately
     // however we should check block size first, if @param:size is much smaller than block size
     // then we should split original block
@@ -174,7 +179,7 @@ void *mm_realloc(void *ptr, size_t size)
 static void* extend_heap(size_t size) {
     if (size < MIN_CHUNK) size = MIN_CHUNK;
     // size round up to align 8 Bytes
-    size = round_up_size(size);
+    size = ALIGN(size);
     void* p;
     if ((p = mem_sbrk(size)) == (void*)-1) return NULL;
     // extend heap will request a new block at the top of heap
@@ -183,14 +188,14 @@ static void* extend_heap(size_t size) {
     // clear current block's allocation bits
     *(UI*)header &= ~1;
     // rebuild header and footer
-    rebuild_hf(header, size);
+    REBUILD_HF(header, size);
     // rebuild epilogue block
-    pack(header + size, 0, 0, 1);
+    PACK(header + size, 0, 0, 1);
     // try to coalese new block with front block 
     header = coalesce(header);
     link_to_list(header);
     // clear epilogue block's pre block allocation bit
-    size = block_size(header);
+    size = BLOCK_SIZE(header);
     *(UI*)(header + size) &= ~2;
     return header;
 }
@@ -200,16 +205,16 @@ static void* extend_heap(size_t size) {
  * @return new header
 */
 static void* coalesce(void* header) {
-    UI size = block_size(header);
+    UI size = BLOCK_SIZE(header);
     void* ne = header + size;
     // if next block is free block
     if (!(*(UI*)ne & 0x1)) {
-        size += block_size(ne);
+        size += BLOCK_SIZE(ne);
         detach_off(ne);
     }
     // if pre block is free block
     if (!((*(UI*)header >> 1) & 0x1)) {
-        UI pre_size =  block_size(header - MIN_UNIT);
+        UI pre_size =  BLOCK_SIZE(header - MIN_UNIT);
         void* pre = header - pre_size;
         size += pre_size;
         detach_off(pre);
@@ -217,7 +222,7 @@ static void* coalesce(void* header) {
     }
     // clear current block's allocation bit
     *(UI*)header &= ~1;
-    rebuild_hf(header, size);
+    REBUILD_HF(header, size);
     // clear next block's pre block allocation bit
     *(UI*)(header + size) &= ~2;
     return header;
@@ -231,7 +236,7 @@ static void* coalesce(void* header) {
 static void* allocate_block(void* header, size_t size) {
     *(UI*)header |= 1;
     detach_off(header);
-    UI ori_size = block_size(header);
+    UI ori_size = BLOCK_SIZE(header);
     // if remaining space is larger than 24 Bytes(minimum cost of free block)
     // then we should split the block
     if (ori_size - size >= 24) split_block(header, size);
@@ -249,14 +254,14 @@ static void* allocate_block(void* header, size_t size) {
 */
 static void split_block(void* header, UI size) {
     // rebuild first block's header
-    UI ori_size = block_size(header);
-    new_size(header, size);
+    UI ori_size = BLOCK_SIZE(header);
+    NEW_SIZE(header, size);
     UI ne_size = ori_size - size;
     void* ne = header + size;
     *(UI*)(ne) |= 0x2;
     *(UI*)(ne) &= ~0x1;
     // rebuild next block's header and footer
-    rebuild_hf(ne, ne_size);
+    REBUILD_HF(ne, ne_size);
     ne = coalesce(ne);
     link_to_list(ne);
     // clear next block's pre block allocation bit
@@ -268,7 +273,7 @@ static void split_block(void* header, UI size) {
  * add free block with @param: header to free list
 */
 static void link_to_list(void* header) {
-    int size = block_size(header);
+    int size = BLOCK_SIZE(header);
     // find suitable list
     int idx = high_bit(size);
     *(ULL*)(header + MIN_UNIT) = NULL_ADD;
@@ -283,7 +288,7 @@ static void link_to_list(void* header) {
  * detach current free block from segregated free list
 */
 static void detach_off(void* header) {
-    UI size = block_size(header);
+    UI size = BLOCK_SIZE(header);
     int idx = high_bit(size);
     ULL pre = *(ULL*)(header + MIN_UNIT);
     ULL ne = *(ULL*)(header + MIN_UNIT + ADD_LEN);
@@ -295,46 +300,6 @@ static void detach_off(void* header) {
         }
         if (pre != NULL_ADD) *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
     }
-}
-
-static UI round_up_size(UI size) {
-    return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
-}
-
-/* get block size */
-static UI block_size(void* header) {
-    return *(UI*)header & ~0x7;
-}
-
-/**
- * assign free block new size
- * typically new size is larger than old one
- * only size changes, control bit remains
-*/
-static void new_size(void* header, UI size) {
-    *(UI*)header &= 0x7;
-    *(UI*)header |= size;
-}
-
-/**
- * use @param: size to rebuild header and footer
- * @param:size will not modify block's control bits
- * rebuild_hf will make sure new header and footer are identical
-*/
-static void rebuild_hf(void* header, UI size) {
-    new_size(header, size);
-    // rebuild footer
-    pack(get_footer(header), size, (*(UI*)header & 0x2) >> 1, *(UI*)header & 0x1);
-}
-
-/* pack the header with specific value */
-static void pack(void* header, UI block_size, int pre, int cur) {
-    *(UI*)header = block_size | (pre & 1) << 1 | (cur & 1);
-}
-
-// only free block has footer
-static void* get_footer(void* header) {
-    return header + block_size(header) - MIN_UNIT;
 }
 
 /* bit wise trick */
